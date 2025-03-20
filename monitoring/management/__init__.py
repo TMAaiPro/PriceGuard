@@ -1,1 +1,1 @@
-# Management package
+# Package de gestion pour le monitoring
