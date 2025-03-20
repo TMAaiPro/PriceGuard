@@ -1,1 +1,1 @@
-# Management commands package for Django
+# Management commands for the monitoring app
