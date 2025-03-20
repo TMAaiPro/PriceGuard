@@ -1,48 +1,47 @@
 import logging
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-
-from .models import MonitoringResult, ProductMonitoringConfig
-from products.models import Product
+from .models import MonitoringTask, MonitoringResult
+from .tasks import process_monitoring_alert
 
 logger = logging.getLogger(__name__)
 
-@receiver(post_save, sender=MonitoringResult)
-def handle_monitoring_result(sender, instance, created, **kwargs):
+@receiver(post_save, sender=MonitoringTask)
+def handle_new_monitoring_task(sender, instance, created, **kwargs):
     """
-    Gère les résultats de monitoring après leur création
-    
-    Args:
-        sender: Modèle qui a déclenché le signal
-        instance: Instance du MonitoringResult
-        created: True si c'est une nouvelle instance
-    """
-    if not created:
-        return
-    
-    # Si une alerte a été déclenchée, on peut envoyer des notifications
-    if instance.alert_triggered:
-        logger.info(f"Alerte déclenchée pour le produit {instance.product.id}: {instance.alert_type}")
-        
-        # Code pour envoyer des notifications
-        # (Implémenter dans un module séparé, puis appeler ici)
-
-@receiver(post_save, sender=Product)
-def create_monitoring_config_for_product(sender, instance, created, **kwargs):
-    """
-    Crée automatiquement une configuration de monitoring pour les nouveaux produits
-    
-    Args:
-        sender: Modèle qui a déclenché le signal
-        instance: Instance du Product
-        created: True si c'est une nouvelle instance
+    Signal déclenché lorsqu'une nouvelle tâche de monitoring est créée.
+    Permet de déclencher des actions automatiques basées sur l'état de la tâche.
     """
     if created:
-        # Vérifier si une configuration existe déjà
-        if not hasattr(instance, 'monitoring_config'):
-            ProductMonitoringConfig.objects.create(
-                product=instance,
-                frequency='normal',
-                active=True
-            )
-            logger.info(f"Configuration de monitoring créée pour le produit {instance.id}")
+        logger.debug(f"Nouvelle tâche de monitoring créée: {instance.id}")
+    else:
+        # Une mise à jour de la tâche, vérifier s'il y a eu un changement de statut
+        if instance.tracker.has_changed('status'):
+            old_status = instance.tracker.previous('status')
+            new_status = instance.status
+            logger.info(f"Tâche {instance.id}: Statut changé de {old_status} à {new_status}")
+            
+            # Actions spécifiques selon les transitions d'état
+            if new_status == 'completed':
+                logger.info(f"Tâche {instance.id} terminée avec succès")
+            elif new_status == 'failed':
+                logger.warning(f"Tâche {instance.id} a échoué: {instance.error_message}")
+
+@receiver(post_save, sender=MonitoringResult)
+def handle_new_monitoring_result(sender, instance, created, **kwargs):
+    """
+    Signal déclenché lorsqu'un nouveau résultat de monitoring est créé.
+    Permet de traiter automatiquement les alertes et de mettre à jour les statistiques.
+    """
+    if created:
+        logger.debug(f"Nouveau résultat de monitoring créé: {instance.id}")
+        
+        # Si une alerte est déclenchée et n'a pas encore été traitée
+        if instance.alert_triggered and not getattr(instance, '_alert_processed', False):
+            logger.info(f"Alerte déclenchée dans le résultat {instance.id}: {instance.alert_type}")
+            
+            # Marquer l'alerte comme traitée pour éviter les doubles traitements
+            instance._alert_processed = True
+            
+            # Traiter l'alerte de manière asynchrone
+            process_monitoring_alert.delay(str(instance.id))
