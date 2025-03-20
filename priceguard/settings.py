@@ -142,7 +142,7 @@ REST_FRAMEWORK = {
         'rest_framework.filters.SearchFilter',
         'rest_framework.filters.OrderingFilter',
     ),
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'DEFAULT_PAGINATION_CLASS': 'core.pagination.StandardResultsSetPagination',
     'PAGE_SIZE': 20
 }
 
@@ -159,9 +159,28 @@ CACHES = {
         "LOCATION": env('REDIS_URL', default='redis://localhost:6379/1'),
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "PARSER_CLASS": "redis.connection.HiredisParser",
+            "SOCKET_CONNECT_TIMEOUT": 5,
+            "SOCKET_TIMEOUT": 5,
+            "CONNECTION_POOL_KWARGS": {
+                "max_connections": 50,
+                "retry_on_timeout": True,
+            },
+            "KEY_PREFIX": "priceguard"
         }
     }
 }
+
+# API cache settings
+API_CACHE_TIMEOUT = 300  # 5 minutes
+API_CACHE_ENABLED = True
+
+# Cache middleware settings
+if API_CACHE_ENABLED:
+    MIDDLEWARE += [
+        'core.middleware.cache_middleware.APICacheMiddleware',
+        'core.middleware.cache_middleware.UserBasedCacheMiddleware',
+    ]
 
 # Celery Configuration
 CELERY_BROKER_URL = env('REDIS_URL', default='redis://localhost:6379/0')
@@ -226,11 +245,38 @@ CELERY_RESULT_EXTENDED = True
 CELERY_RESULT_BACKEND_ALWAYS_RETRY = True
 CELERY_RESULT_BACKEND_MAX_RETRIES = 10
 
-# API documentation
+# drf-spectacular settings
 SPECTACULAR_SETTINGS = {
     'TITLE': 'PriceGuard API',
-    'DESCRIPTION': 'API for tracking product prices and alerting on price changes',
+    'DESCRIPTION': 'API for the PriceGuard price monitoring and alerting platform',
     'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'SCHEMA_PATH_PREFIX': r'/api/v[0-9]',
+    'COMPONENT_SPLIT_REQUEST': True,
+    'AUTHENTICATION_WHITELIST': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+    # Other settings
+    'SWAGGER_UI_SETTINGS': {
+        'deepLinking': True,
+        'displayOperationId': True,
+        'persistAuthorization': True,
+    },
+    'SERVE_PERMISSIONS': ['rest_framework.permissions.IsAdminUser'],
+    'SERVE_AUTHENTICATION': ['rest_framework.authentication.SessionAuthentication'],
+    'REDOC_UI_SETTINGS': {
+        'hideDownloadButton': False,
+    },
+    'TAGS': [
+        {'name': 'auth', 'description': 'Authentication operations'},
+        {'name': 'users', 'description': 'User management operations'},
+        {'name': 'products', 'description': 'Product operations'},
+        {'name': 'alerts', 'description': 'Alert operations'},
+        {'name': 'analytics', 'description': 'Analytics operations'},
+    ],
+    'ENUM_NAME_OVERRIDES': {
+        'AlertTypeEnum': 'alerts.models.Alert.ALERT_TYPES',
+    }
 }
 
 # Monitoring settings
@@ -295,3 +341,32 @@ LOGGING = {
 
 # Créer le répertoire de logs si nécessaire
 os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
+
+# JWT Settings
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': True,
+    
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'VERIFYING_KEY': None,
+    'AUDIENCE': None,
+    'ISSUER': None,
+    
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+    
+    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
+    'TOKEN_TYPE_CLAIM': 'token_type',
+    
+    'JTI_CLAIM': 'jti',
+    
+    'SLIDING_TOKEN_REFRESH_EXP_CLAIM': 'refresh_exp',
+    'SLIDING_TOKEN_LIFETIME': timedelta(hours=1),
+    'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=7),
+}
