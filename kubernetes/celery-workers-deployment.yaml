@@ -24,7 +24,7 @@ spec:
         - name: worker
           image: priceguard/backend:latest
           imagePullPolicy: Always
-          command: ["celery", "-A", "priceguard", "worker", "--loglevel=info", "-Q", "high_priority,default,low_priority"]
+          command: ["celery", "-A", "priceguard", "worker", "--loglevel=info", "-Q", "high_priority,default,low_priority", "-c", "8"]
           env:
             - name: DJANGO_SETTINGS_MODULE
               value: "priceguard.settings"
@@ -45,6 +45,15 @@ spec:
                   key: django-secret-key
             - name: C_FORCE_ROOT
               value: "true"
+            # Optimisations spécifiques pour les workers Celery
+            - name: CELERY_WORKER_PREFETCH_MULTIPLIER
+              value: "1"
+            - name: CELERY_ACKS_LATE 
+              value: "true"
+            - name: CELERY_TASK_TIME_LIMIT
+              value: "600"
+            - name: CELERY_TASK_SOFT_TIME_LIMIT
+              value: "300"
           resources:
             limits:
               cpu: "2"
@@ -56,6 +65,20 @@ spec:
             - name: timezone-config
               mountPath: /etc/localtime
               readOnly: true
+          # Configuration de santé pour éviter de redémarrer des workers qui traitent des tâches
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - priceguard
+                - inspect
+                - ping
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
       volumes:
         - name: timezone-config
           hostPath:
@@ -107,6 +130,11 @@ spec:
                   key: django-secret-key
             - name: C_FORCE_ROOT
               value: "true"
+            # Optimisations spécifiques pour les workers de maintenance
+            - name: CELERY_TASK_TIME_LIMIT
+              value: "1800"  # 30 minutes pour les tâches longues
+            - name: CELERY_TASK_SOFT_TIME_LIMIT
+              value: "1500"  # 25 minutes
           resources:
             limits:
               cpu: "1"
@@ -114,3 +142,22 @@ spec:
             requests:
               cpu: "200m"
               memory: "256Mi"
+          volumeMounts:
+            - name: timezone-config
+              mountPath: /etc/localtime
+              readOnly: true
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - priceguard
+                - inspect
+                - ping
+            initialDelaySeconds: 30
+            periodSeconds: 120
+            timeoutSeconds: 10
+      volumes:
+        - name: timezone-config
+          hostPath:
+            path: /usr/share/zoneinfo/Europe/Paris
