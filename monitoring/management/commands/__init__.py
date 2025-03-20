@@ -1,1 +1,1 @@
-# Commands package
+# Package de commandes pour le monitoring
