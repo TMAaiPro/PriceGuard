@@ -50,3 +50,45 @@ spec:
             requests:
               cpu: "100m"
               memory: "128Mi"
+          volumeMounts:
+            - name: timezone-config
+              mountPath: /etc/localtime
+              readOnly: true
+            - name: beat-data
+              mountPath: /app/data
+          livenessProbe:
+            exec:
+              command:
+                - cat
+                - /app/data/celerybeat-schedule.db
+            initialDelaySeconds: 120
+            periodSeconds: 60
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command:
+                - ls
+                - /app/data/celerybeat-schedule.db
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+      volumes:
+        - name: timezone-config
+          hostPath:
+            path: /usr/share/zoneinfo/Europe/Paris
+        - name: beat-data
+          persistentVolumeClaim:
+            claimName: priceguard-celery-beat-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: priceguard-celery-beat-data
+  namespace: priceguard
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
