@@ -5,6 +5,7 @@ Django settings for priceguard project.
 import os
 from pathlib import Path
 import environ
+from datetime import timedelta
 
 # Initialiser environ
 env = environ.Env(
@@ -41,6 +42,8 @@ INSTALLED_APPS = [
     'corsheaders',
     'django_filters',
     'drf_spectacular',
+    'django_celery_beat',
+    'django_celery_results',
     
     # Local apps
     'core',
@@ -160,13 +163,68 @@ CACHES = {
     }
 }
 
-# Celery settings
+# Celery Configuration
 CELERY_BROKER_URL = env('REDIS_URL', default='redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = env('REDIS_URL', default='redis://localhost:6379/0')
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_ACKS_LATE = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TASK_TIME_LIMIT = 600  # 10 minutes
+CELERY_TASK_SOFT_TIME_LIMIT = 300  # 5 minutes
+
+# Configuration spécifique
+CELERY_TASK_ROUTES = {
+    'monitoring.tasks.high_priority_monitoring': {'queue': 'high_priority'},
+    'monitoring.tasks.normal_priority_monitoring': {'queue': 'default'},
+    'monitoring.tasks.low_priority_monitoring': {'queue': 'low_priority'},
+    'monitoring.tasks.update_product_priorities': {'queue': 'maintenance'},
+    'monitoring.tasks.cleanup_old_monitoring_data': {'queue': 'maintenance'},
+}
+
+# Configuration redis avec protections contre time-out
+BROKER_TRANSPORT_OPTIONS = {
+    'visibility_timeout': 3600,  # 1 heure
+    'max_retries': 5,
+    'interval_start': 0,
+    'interval_step': 0.2,
+    'interval_max': 0.5,
+}
+
+# Configuration des tâches périodiques
+CELERY_BEAT_SCHEDULE = {
+    'schedule-monitoring-tasks': {
+        'task': 'monitoring.tasks.schedule_monitoring_tasks',
+        'schedule': timedelta(minutes=5),
+        'kwargs': {'batch_size': 1000},
+    },
+    'process-monitoring-queue': {
+        'task': 'monitoring.tasks.process_monitoring_queue',
+        'schedule': timedelta(minutes=2),
+        'kwargs': {'max_tasks': 200},
+    },
+    'update-product-priorities': {
+        'task': 'monitoring.tasks.update_product_priorities',
+        'schedule': timedelta(hours=6),
+        'kwargs': {'batch_size': 5000},
+    },
+    'cleanup-old-monitoring-data': {
+        'task': 'monitoring.tasks.cleanup_old_monitoring_data',
+        'schedule': timedelta(days=1),
+        'kwargs': {'days_to_keep': 30},
+    },
+    'update-monitoring-stats': {
+        'task': 'monitoring.tasks.update_monitoring_stats',
+        'schedule': timedelta(hours=1),
+    },
+}
+
+# Configuration Celery Results
+CELERY_RESULT_EXTENDED = True
+CELERY_RESULT_BACKEND_ALWAYS_RETRY = True
+CELERY_RESULT_BACKEND_MAX_RETRIES = 10
 
 # API documentation
 SPECTACULAR_SETTINGS = {
@@ -174,3 +232,66 @@ SPECTACULAR_SETTINGS = {
     'DESCRIPTION': 'API for tracking product prices and alerting on price changes',
     'VERSION': '1.0.0',
 }
+
+# Monitoring settings
+MONITORING = {
+    'DEFAULT_FREQUENCY': 'normal',  # Fréquence de monitoring par défaut (high, normal, low)
+    'HIGH_FREQUENCY_HOURS': 4,      # Intervalle pour fréquence haute (en heures)
+    'NORMAL_FREQUENCY_HOURS': 12,   # Intervalle pour fréquence normale (en heures)
+    'LOW_FREQUENCY_HOURS': 24,      # Intervalle pour fréquence basse (en heures)
+    'SCREENSHOT_ENABLED': True,     # Activer les captures d'écran par défaut
+    'DEFAULT_PRIORITY': 5,          # Priorité par défaut (1-10)
+    'MAX_RETRIES': 3,               # Nombre maximum de tentatives pour une tâche
+    'RETRY_DELAY': 60               # Délai entre les tentatives (en secondes)
+}
+
+# Logging configuration
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'level': 'INFO',
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        'file': {
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs/priceguard.log'),
+            'maxBytes': 1024 * 1024 * 10,  # 10 MB
+            'backupCount': 10,
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': True,
+        },
+        'monitoring': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'celery': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
+
+# Créer le répertoire de logs si nécessaire
+os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
