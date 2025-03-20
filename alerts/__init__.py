@@ -1,1 +1,1 @@
-# Alerts app initialization
+# Alerts application package
