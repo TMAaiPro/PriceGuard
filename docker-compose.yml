@@ -11,63 +11,93 @@ services:
       - POSTGRES_DB=priceguard
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U priceguard"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:6-alpine
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   web:
-    build: ./backend
-    command: python manage.py runserver 0.0.0.0:8000
+    build: .
+    command: web
     volumes:
-      - ./backend:/app
+      - .:/app
+      - media_data:/app/media
     ports:
       - "8000:8000"
     depends_on:
       - db
       - redis
+    env_file:
+      - .env
     environment:
       - DEBUG=1
       - DATABASE_URL=postgres://priceguard:priceguard@db:5432/priceguard
       - REDIS_URL=redis://redis:6379/0
+      - DJANGO_SETTINGS_MODULE=priceguard.settings
 
-  celery:
-    build: ./backend
-    command: celery -A priceguard worker -l INFO
+  celery_worker:
+    build: .
+    command: worker
     volumes:
-      - ./backend:/app
+      - .:/app
+      - media_data:/app/media
     depends_on:
       - web
       - redis
+    env_file:
+      - .env
     environment:
       - DEBUG=1
       - DATABASE_URL=postgres://priceguard:priceguard@db:5432/priceguard
       - REDIS_URL=redis://redis:6379/0
+      - DJANGO_SETTINGS_MODULE=priceguard.settings
 
-  celery-beat:
-    build: ./backend
-    command: celery -A priceguard beat -l INFO
+  celery_beat:
+    build: .
+    command: beat
     volumes:
-      - ./backend:/app
+      - .:/app
     depends_on:
       - web
       - redis
+    env_file:
+      - .env
     environment:
       - DEBUG=1
       - DATABASE_URL=postgres://priceguard:priceguard@db:5432/priceguard
       - REDIS_URL=redis://redis:6379/0
+      - DJANGO_SETTINGS_MODULE=priceguard.settings
 
-  frontend:
-    build: ./frontend
-    command: npm start
+  flower:
+    build: .
+    command: flower
     volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      - .:/app
     ports:
-      - "3000:3000"
+      - "5555:5555"
+    depends_on:
+      - celery_worker
+    env_file:
+      - .env
     environment:
-      - REACT_APP_API_URL=http://localhost:8000/api
+      - DEBUG=1
+      - REDIS_URL=redis://redis:6379/0
+      - DJANGO_SETTINGS_MODULE=priceguard.settings
 
 volumes:
   postgres_data:
+  redis_data:
+  media_data:
