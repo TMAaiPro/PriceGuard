@@ -1,55 +1,57 @@
 import logging
-from django.db.models.signals import post_save, post_delete
+from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils import timezone
 
-from .models import MonitoringResult, ProductMonitoringConfig
-from .tasks import process_monitoring_alert
+from .models import MonitoringTask, MonitoringResult
+from .tasks import high_priority_monitoring, normal_priority_monitoring, low_priority_monitoring
 
 logger = logging.getLogger(__name__)
 
-@receiver(post_save, sender=MonitoringResult)
-def handle_monitoring_result_saved(sender, instance, created, **kwargs):
-    """
-    Gère les actions à effectuer lorsqu'un résultat de monitoring est sauvegardé
-    """
-    if not created:
-        return
-        
-    # Mettre à jour la date de dernier monitoring pour le produit
-    try:
-        config = ProductMonitoringConfig.objects.get(product=instance.product)
-        config.last_monitored = instance.monitored_at
-        
-        # Recalculer la prochaine date de vérification
-        interval_hours = config.get_monitoring_interval()
-        config.next_scheduled = instance.monitored_at + timezone.timedelta(hours=interval_hours)
-        
-        config.save(update_fields=['last_monitored', 'next_scheduled', 'updated_at'])
-        logger.debug(f"Updated monitoring config for product {instance.product.id}")
-    except ProductMonitoringConfig.DoesNotExist:
-        # Créer une configuration si elle n'existe pas
-        ProductMonitoringConfig.objects.create(
-            product=instance.product,
-            last_monitored=instance.monitored_at,
-            next_scheduled=instance.monitored_at + timezone.timedelta(hours=12)  # Valeur par défaut
-        )
-        logger.info(f"Created new monitoring config for product {instance.product.id}")
-    
-    # Traiter les alertes
-    if instance.alert_triggered:
-        logger.info(f"Alert triggered for product {instance.product.id}: {instance.alert_type}")
 
-@receiver(post_save, sender=ProductMonitoringConfig)
-def handle_config_saved(sender, instance, created, **kwargs):
+@receiver(post_save, sender=MonitoringTask)
+def handle_new_monitoring_task(sender, instance, created, **kwargs):
     """
-    Gère les actions à effectuer lorsqu'une configuration de monitoring est sauvegardée
+    Signal handler pour traiter les nouvelles tâches de monitoring
+    dès leur création si elles sont hautement prioritaires
+    """
+    if created and instance.status == 'pending' and instance.priority <= 3:
+        logger.info(f"Traitement immédiat de la tâche haute priorité {instance.id}")
+        
+        # Mettre à jour le statut
+        instance.status = 'scheduled'
+        
+        # Lancer la tâche immédiatement
+        task = high_priority_monitoring.delay(str(instance.id))
+        
+        # Enregistrer l'ID de la tâche Celery
+        instance.celery_task_id = task.id
+        instance.save(update_fields=['status', 'celery_task_id', 'updated_at'])
+
+
+@receiver(post_save, sender=MonitoringResult)
+def handle_monitoring_result(sender, instance, created, **kwargs):
+    """
+    Signal handler pour traiter les résultats de monitoring
+    dès leur création
     """
     if created:
-        logger.info(f"New monitoring config created for product {instance.product.id}")
+        # Enregistrer dans les logs les changements importants
+        changes = []
         
-        # Si aucune date de prochaine vérification n'est définie, la calculer
-        if not instance.next_scheduled and instance.last_monitored:
-            interval_hours = instance.get_monitoring_interval()
-            instance.next_scheduled = instance.last_monitored + timezone.timedelta(hours=interval_hours)
-            instance.save(update_fields=['next_scheduled'])
+        if instance.price_changed:
+            changes.append(f"prix: {instance.previous_price} -> {instance.current_price}")
+        
+        if instance.availability_changed:
+            changes.append(f"disponibilité: {instance.previously_available} -> {instance.currently_available}")
+        
+        if changes:
+            logger.info(
+                f"Changements détectés pour {instance.product}: {', '.join(changes)}"
+            )
+        
+        # Si une alerte est déclenchée, enregistrer dans les logs
+        if instance.alert_triggered:
+            logger.info(
+                f"Alerte déclenchée pour {instance.product}: {instance.alert_type} - {instance.alert_message}"
+            )
