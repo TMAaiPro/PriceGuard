@@ -1,1 +1,1 @@
-# Package de commandes pour le monitoring
+# Commandes de gestion Django pour le service de monitoring
