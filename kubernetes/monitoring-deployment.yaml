@@ -47,6 +47,11 @@ spec:
                 secretKeyRef:
                   name: priceguard-secrets
                   key: django-secret-key
+            # Configuration pour le mode de production
+            - name: DJANGO_DEBUG
+              value: "False"
+            - name: DJANGO_ALLOWED_HOSTS
+              value: "*.priceguard.io,priceguard.io,monitoring-api.priceguard.io"
           resources:
             limits:
               cpu: "1"
@@ -74,3 +79,48 @@ spec:
         - name: timezone-config
           hostPath:
             path: /usr/share/zoneinfo/Europe/Paris
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: priceguard-monitoring-service
+  namespace: priceguard
+  labels:
+    app: priceguard
+    component: monitoring
+spec:
+  selector:
+    app: priceguard
+    component: monitoring
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: priceguard-monitoring-ingress
+  namespace: priceguard
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+  - hosts:
+    - monitoring-api.priceguard.io
+    secretName: priceguard-monitoring-tls
+  rules:
+  - host: monitoring-api.priceguard.io
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: priceguard-monitoring-service
+            port:
+              name: http
