@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: priceguard-celery-beat
+  namespace: priceguard
+  labels:
+    app: priceguard
+    component: celery-beat
+spec:
+  replicas: 1  # Toujours une seule instance pour éviter les duplications
+  selector:
+    matchLabels:
+      app: priceguard
+      component: celery-beat
+  strategy:
+    type: Recreate  # Assure qu'une seule instance fonctionne à la fois
+  template:
+    metadata:
+      labels:
+        app: priceguard
+        component: celery-beat
+    spec:
+      containers:
+        - name: beat
+          image: priceguard/backend:latest
+          imagePullPolicy: Always
+          command: ["celery", "-A", "priceguard", "beat", "--loglevel=info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+          env:
+            - name: DJANGO_SETTINGS_MODULE
+              value: "priceguard.settings"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: priceguard-secrets
+                  key: database-url
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: priceguard-secrets
+                  key: redis-url
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: priceguard-secrets
+                  key: django-secret-key
+          resources:
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
