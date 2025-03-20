@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: priceguard-celery-workers
+  namespace: priceguard
+  labels:
+    app: priceguard
+    component: celery-workers
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: priceguard
+      component: celery-workers
+  strategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: priceguard
+        component: celery-workers
+    spec:
+      containers:
+        - name: worker
+          image: priceguard/backend:latest
+          imagePullPolicy: Always
+          command: ["celery", "-A", "priceguard", "worker", "--loglevel=info", "-Q", "high_priority,default,low_priority"]
+          env:
+            - name: DJANGO_SETTINGS_MODULE
+              value: "priceguard.settings"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: priceguard-secrets
+                  key: database-url
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: priceguard-secrets
+                  key: redis-url
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: priceguard-secrets
+                  key: django-secret-key
+            - name: C_FORCE_ROOT
+              value: "true"
+          resources:
+            limits:
+              cpu: "2"
+              memory: "1Gi"
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: timezone-config
+              mountPath: /etc/localtime
+              readOnly: true
+      volumes:
+        - name: timezone-config
+          hostPath:
+            path: /usr/share/zoneinfo/Europe/Paris
+---
+# Workers for maintenance queue
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: priceguard-maintenance-workers
+  namespace: priceguard
+  labels:
+    app: priceguard
+    component: maintenance-workers
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: priceguard
+      component: maintenance-workers
+  template:
+    metadata:
+      labels:
+        app: priceguard
+        component: maintenance-workers
+    spec:
+      containers:
+        - name: worker
+          image: priceguard/backend:latest
+          imagePullPolicy: Always
+          command: ["celery", "-A", "priceguard", "worker", "--loglevel=info", "-Q", "maintenance", "-c", "2"]
+          env:
+            - name: DJANGO_SETTINGS_MODULE
+              value: "priceguard.settings"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: priceguard-secrets
+                  key: database-url
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: priceguard-secrets
+                  key: redis-url
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: priceguard-secrets
+                  key: django-secret-key
+            - name: C_FORCE_ROOT
+              value: "true"
+          resources:
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
