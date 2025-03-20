@@ -1,1 +1,1 @@
-# Monitoring app initialization
+# PriceGuard Monitoring Service
