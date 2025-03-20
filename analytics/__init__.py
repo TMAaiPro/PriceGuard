@@ -1,1 +1,1 @@
-# Analytics app initialization
+# Analytics application package
