@@ -1,1 +1,1 @@
-# Commandes de gestion Django pour le service de monitoring
+# Custom management commands for the monitoring app
