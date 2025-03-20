@@ -1,1 +1,1 @@
-# Tests package for monitoring
+# Tests pour le module de monitoring
