@@ -4,7 +4,7 @@ from django.utils import timezone
 from datetime import timedelta
 import json
 
-from .models import AlertRule, NotificationDelivery, NotificationBatch, NotificationBatchItem, InAppNotification
+from .models import AlertRule, NotificationDelivery, NotificationBatch, NotificationBatchItem, InAppNotification, NotificationEngagement, UserEngagementMetrics
 from alerts.models import Alert
 from products.models import Product, PriceHistory
 
@@ -339,3 +339,311 @@ class AlertRuleService:
                 batch_type=batch_type,
                 priority=priority
             )
+
+
+class EngagementService:
+    """Service pour le tracking et l'analyse de l'engagement utilisateur"""
+    
+    @classmethod
+    def track_engagement(cls, delivery_id, event_type, request=None, data=None):
+        """
+        Enregistre un événement d'engagement
+        
+        Args:
+            delivery_id: ID de la livraison
+            event_type: Type d'événement
+            request: Objet requête HTTP (optionnel)
+            data: Données supplémentaires (optionnel)
+            
+        Returns:
+            NotificationEngagement: Objet engagement créé
+        """
+        try:
+            delivery = NotificationDelivery.objects.get(id=delivery_id)
+            
+            # Préparer les données de l'événement
+            event_data = data or {}
+            
+            # Extraire les informations de la requête si fournie
+            device_type = ''
+            platform = ''
+            client_ip = None
+            user_agent = ''
+            
+            if request:
+                client_ip = request.META.get('REMOTE_ADDR')
+                user_agent = request.META.get('HTTP_USER_AGENT', '')
+                
+                # Détecter le type d'appareil et la plateforme
+                if 'mobile' in user_agent.lower():
+                    device_type = 'mobile'
+                elif 'tablet' in user_agent.lower():
+                    device_type = 'tablet'
+                else:
+                    device_type = 'desktop'
+                
+                if 'android' in user_agent.lower():
+                    platform = 'android'
+                elif 'iphone' in user_agent.lower() or 'ipad' in user_agent.lower():
+                    platform = 'ios'
+                elif 'windows' in user_agent.lower():
+                    platform = 'windows'
+                elif 'macintosh' in user_agent.lower() or 'mac os' in user_agent.lower():
+                    platform = 'macos'
+                elif 'linux' in user_agent.lower():
+                    platform = 'linux'
+            
+            # Créer l'engagement
+            engagement = NotificationEngagement.objects.create(
+                user=delivery.user,
+                delivery=delivery,
+                event_type=event_type,
+                device_type=device_type,
+                platform=platform,
+                client_ip=client_ip,
+                user_agent=user_agent,
+                data=event_data
+            )
+            
+            # Mettre à jour le statut de la livraison
+            if event_type == 'delivered':
+                delivery.mark_as_delivered()
+            elif event_type == 'opened':
+                delivery.mark_as_opened()
+            elif event_type == 'clicked':
+                delivery.mark_as_clicked()
+            
+            # Mettre à jour les métriques d'engagement de l'utilisateur
+            cls.update_user_metrics(delivery.user.id)
+            
+            return engagement
+            
+        except NotificationDelivery.DoesNotExist:
+            logger.error(f"Livraison introuvable: {delivery_id}")
+            return None
+        except Exception as e:
+            logger.exception(f"Erreur lors du tracking d'engagement: {str(e)}")
+            return None
+    
+    @classmethod
+    def update_user_metrics(cls, user_id):
+        """
+        Met à jour les métriques d'engagement pour un utilisateur
+        
+        Args:
+            user_id: ID de l'utilisateur
+        """
+        from django.contrib.auth import get_user_model
+        from django.db.models import Count, Case, When, IntegerField, F, FloatField, Avg
+        from django.db.models.functions import TruncHour, TruncDay
+        
+        User = get_user_model()
+        
+        try:
+            user = User.objects.get(id=user_id)
+            
+            # Récupérer ou créer les métriques d'engagement
+            metrics, created = UserEngagementMetrics.objects.get_or_create(user=user)
+            
+            # Calculer les compteurs globaux
+            total_notifications = NotificationDelivery.objects.filter(
+                user=user,
+                status__in=['sent', 'delivered', 'opened', 'clicked']
+            ).count()
+            
+            opened_count = NotificationDelivery.objects.filter(
+                user=user,
+                status__in=['opened', 'clicked']
+            ).count()
+            
+            clicked_count = NotificationDelivery.objects.filter(
+                user=user,
+                status='clicked'
+            ).count()
+            
+            # Compter les actions effectuées suite à une notification
+            action_count = NotificationEngagement.objects.filter(
+                user=user,
+                event_type='action_taken'
+            ).count()
+            
+            # Calculer les taux
+            open_rate = (opened_count / total_notifications * 100) if total_notifications > 0 else 0
+            click_rate = (clicked_count / total_notifications * 100) if total_notifications > 0 else 0
+            action_rate = (action_count / total_notifications * 100) if total_notifications > 0 else 0
+            
+            # Analyser par canal
+            email_metrics = cls._calculate_channel_metrics(user, 'email')
+            push_metrics = cls._calculate_channel_metrics(user, 'push')
+            in_app_metrics = cls._calculate_channel_metrics(user, 'in_app')
+            
+            # Déduire les canaux optimaux
+            channels = ['email', 'push', 'in_app']
+            engagement_rates = [
+                (email_metrics.get('open_rate', 0), 'email'),
+                (push_metrics.get('open_rate', 0), 'push'),
+                (in_app_metrics.get('open_rate', 0), 'in_app')
+            ]
+            
+            # Trier par taux d'engagement
+            sorted_channels = sorted(engagement_rates, reverse=True)
+            optimal_channels = {
+                'primary': sorted_channels[0][1] if sorted_channels else 'email',
+                'secondary': sorted_channels[1][1] if len(sorted_channels) > 1 else 'push',
+                'rates': {channel: rate for rate, channel in engagement_rates}
+            }
+            
+            # Analyser le timing optimal
+            optimal_timing = cls._calculate_optimal_timing(user)
+            
+            # Déduire la fréquence optimale
+            user_batches = NotificationBatch.objects.filter(
+                user=user,
+                status='sent'
+            ).values('batch_type').annotate(
+                count=Count('id'),
+                open_count=Count(Case(
+                    When(items__alert__deliveries__status__in=['opened', 'clicked'], then=1),
+                    output_field=IntegerField()
+                ))
+            )
+            
+            batch_engagement = {}
+            for batch in user_batches:
+                batch_type = batch['batch_type']
+                open_rate = (batch['open_count'] / batch['count'] * 100) if batch['count'] > 0 else 0
+                batch_engagement[batch_type] = open_rate
+            
+            # Choisir le type de batch avec le meilleur taux d'engagement
+            optimal_frequency = max(batch_engagement.items(), key=lambda x: x[1])[0] if batch_engagement else 'daily'
+            
+            # Mettre à jour les métriques
+            metrics.total_notifications = total_notifications
+            metrics.opened_count = opened_count
+            metrics.clicked_count = clicked_count
+            metrics.action_count = action_count
+            metrics.open_rate = open_rate
+            metrics.click_rate = click_rate
+            metrics.action_rate = action_rate
+            metrics.email_metrics = email_metrics
+            metrics.push_metrics = push_metrics
+            metrics.in_app_metrics = in_app_metrics
+            metrics.optimal_channels = optimal_channels
+            metrics.optimal_timing = optimal_timing
+            metrics.optimal_frequency = optimal_frequency
+            
+            metrics.save()
+            
+            return metrics
+            
+        except User.DoesNotExist:
+            logger.error(f"Utilisateur introuvable: {user_id}")
+            return None
+        except Exception as e:
+            logger.exception(f"Erreur lors de la mise à jour des métriques d'engagement: {str(e)}")
+            return None
+    
+    @classmethod
+    def _calculate_channel_metrics(cls, user, channel):
+        """
+        Calcule les métriques d'engagement pour un canal spécifique
+        
+        Args:
+            user: Utilisateur
+            channel: Canal de notification
+            
+        Returns:
+            dict: Métriques du canal
+        """
+        # Récupérer toutes les notifications pour ce canal
+        notifications = NotificationDelivery.objects.filter(
+            user=user,
+            channel=channel,
+            status__in=['sent', 'delivered', 'opened', 'clicked']
+        )
+        
+        total = notifications.count()
+        
+        if total == 0:
+            return {
+                'total': 0,
+                'open_rate': 0,
+                'click_rate': 0,
+                'action_rate': 0
+            }
+        
+        # Compter les différents statuts
+        opened = notifications.filter(status__in=['opened', 'clicked']).count()
+        clicked = notifications.filter(status='clicked').count()
+        
+        # Compter les actions effectuées
+        actions = NotificationEngagement.objects.filter(
+            user=user,
+            delivery__channel=channel,
+            event_type='action_taken'
+        ).count()
+        
+        # Calculer les taux
+        open_rate = (opened / total * 100) if total > 0 else 0
+        click_rate = (clicked / total * 100) if total > 0 else 0
+        action_rate = (actions / total * 100) if total > 0 else 0
+        
+        return {
+            'total': total,
+            'opened': opened,
+            'clicked': clicked,
+            'actions': actions,
+            'open_rate': open_rate,
+            'click_rate': click_rate,
+            'action_rate': action_rate
+        }
+    
+    @classmethod
+    def _calculate_optimal_timing(cls, user):
+        """
+        Analyse les heures d'ouverture et de clic pour déterminer le timing optimal
+        
+        Args:
+            user: Utilisateur
+            
+        Returns:
+            dict: Timing optimal par jour et par heure
+        """
+        from django.db.models import Count, F, Max
+        from django.db.models.functions import TruncHour, TruncDay, Extract
+        
+        # Analyses par heure de la journée
+        hour_engagement = NotificationEngagement.objects.filter(
+            user=user,
+            event_type__in=['opened', 'clicked']
+        ).annotate(
+            hour=Extract('timestamp', 'hour')
+        ).values('hour').annotate(
+            count=Count('id')
+        ).order_by('-count')
+        
+        # Analyses par jour de la semaine
+        day_engagement = NotificationEngagement.objects.filter(
+            user=user,
+            event_type__in=['opened', 'clicked']
+        ).annotate(
+            day=Extract('timestamp', 'dow')  # 0 (Sunday) to 6 (Saturday)
+        ).values('day').annotate(
+            count=Count('id')
+        ).order_by('-count')
+        
+        # Trouver l'heure et le jour les plus actifs
+        best_hour = hour_engagement.first()
+        best_day = day_engagement.first()
+        
+        # Convertir en format lisible
+        day_names = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+        
+        optimal_timing = {
+            'best_hour': best_hour['hour'] if best_hour else 9,  # Par défaut 9h
+            'best_day': day_names[best_day['day']] if best_day else 'monday',  # Par défaut lundi
+            'hourly_data': {hour['hour']: hour['count'] for hour in hour_engagement},
+            'daily_data': {day_names[day['day']]: day['count'] for day in day_engagement}
+        }
+        
+        return optimal_timing
