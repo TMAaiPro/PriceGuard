@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ subject }}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background-color: #4CAF50;
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        .content {
+            padding: 20px;
+            background-color: #f9f9f9;
+        }
+        .alert-box {
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin-bottom: 20px;
+            background-color: white;
+            border-radius: 4px;
+        }
+        .price {
+            font-size: 22px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        .old-price {
+            text-decoration: line-through;
+            color: #999;
+        }
+        .button {
+            display: inline-block;
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 4px;
+            margin-top: 15px;
+        }
+        .footer {
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #777;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{{ title }}</h1>
+        </div>
+        
+        <div class="content">
+            <p>Bonjour {{ user.first_name|default:"" }},</p>
+            
+            <div class="alert-box">
+                <h2>{{ alert.product.title }}</h2>
+                
+                {% if alert.alert_type == 'price_drop' or alert.alert_type == 'price_target' or alert.alert_type == 'lowest_price' %}
+                    <p>
+                        <span class="price">{{ alert.current_price|floatformat:2 }} €</span>
+                        {% if alert.previous_price %}
+                            <span class="old-price">{{ alert.previous_price|floatformat:2 }} €</span>
+                            <span>(-{{ alert.price_difference_percentage|floatformat:1 }}%)</span>
+                        {% endif %}
+                    </p>
+                {% endif %}
+                
+                <p>{{ alert.message }}</p>
+                
+                <a href="{{ product_url }}" class="button">Voir le produit</a>
+            </div>
+            
+            <p>
+                Restez à l'affût des meilleures offres avec PriceGuard !
+            </p>
+        </div>
+        
+        <div class="footer">
+            <p>
+                Cet email a été envoyé à {{ user.email }}.<br>
+                Si vous ne souhaitez plus recevoir ces notifications, <a href="{{ unsubscribe_url }}">cliquez ici pour vous désabonner</a>.
+            </p>
+            <p>&copy; {% now "Y" %} PriceGuard. Tous droits réservés.</p>
+        </div>
+    </div>
+</body>
+</html>
